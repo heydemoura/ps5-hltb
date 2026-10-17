@@ -4,6 +4,8 @@
  * Modifications Copyright (C) 2026 erickdavestech
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
+ * Modifications Copyright (C) 2026 Heyde Moura: resolve native HTTPS imports.
+ *
  * Source-only bridge around the pinned ps5-payload-dev/shsrv v0.20 loader.
  * It restores the two loader properties observed in the stable v0.28b
  * binary:
@@ -56,6 +58,8 @@ static const char* const g_resolve_libraries[] = {
     "libmonosgen-2.0.sprx",
     "libmonosgen-2.0.0.sprx",
     "libSceNet.sprx",
+    "libSceSsl.sprx",
+    "libSceHttp2.sprx",
     "libSceSystemService.sprx",
     "libSceSysmodule.sprx",
     "libSceUserService.sprx",
