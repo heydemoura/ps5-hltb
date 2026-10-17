@@ -90,6 +90,31 @@ Completionist: 31h 51m
   payload. The resident code lasts until ShellUI restarts or the console reboots.
   Loading a duplicate into the same ShellUI is refused.
 
+## Releases
+
+Download `hltb.elf` from [GitHub Releases](https://github.com/heydemoura/ps5-hltb/releases).
+Each release also includes the optional `hltb-query.elf` diagnostic and
+`SHA256SUMS` for both payloads.
+
+The [Build and release workflow](.github/workflows/release.yml) runs the payload
+build and host sanitizer tests on Ubuntu 24.04 using the checksum-pinned PS5
+payload SDK v0.44 and LLVM 18. Pull requests and manual workflow runs validate
+the build without publishing.
+
+To cut a release, merge the changes to `main`, add optional release notes in
+`docs/releases/vX.Y.Z.md`, then push an annotated version tag:
+
+```sh
+git tag -a vX.Y.Z -m "Release vX.Y.Z"
+git push origin vX.Y.Z
+```
+
+After a successful build, the workflow creates and publishes the release with
+both ELF assets and checksums. If no version-specific notes exist, GitHub
+generates them. Publishing a release through GitHub's UI also runs the build
+and attaches its assets. Rerunning the workflow replaces the assets for that
+tag; it does not create another release. No personal access token is required.
+
 ## Query and development tools
 
 `build/hltb-query.elf` is a separate stdout-only diagnostic:
