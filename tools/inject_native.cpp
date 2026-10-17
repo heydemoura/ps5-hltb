@@ -17,7 +17,12 @@ extern "C" {
 #include "pt.h"
 int hltb_export_catalog(void);
 }
+#ifdef HLTB_RENDER_PROBE
+#include "render_probe_blob.h"
+#define shell_native_blob render_probe_blob
+#else
 #include "shell_native_blob.h"
+#endif
 struct undo_record {
     hltb_native_request q;
     uint32_t size;
@@ -69,8 +74,9 @@ static bool patch(pid_t pid, const char *path, bool remove) {
         if (!ok)
             return false;
     }
-    if (q.magic != HLTB_NATIVE_MAGIC || q.pid != pid || (q.kind != 1 && q.kind != 2) ||
-        q.method < 0x10000 || q.hook < 0x10000 || q.trampoline < 0x10000)
+    if (q.magic != HLTB_NATIVE_MAGIC || q.pid != pid ||
+        (q.kind != 1 && q.kind != 2 && q.kind != 3) || q.method < 0x10000 || q.hook < 0x10000 ||
+        q.trampoline < 0x10000)
         return false;
     uint64_t auth = kernel_get_ucred_authid(getpid());
     if (!auth || kernel_set_ucred_authid(getpid(), UINT64_C(0x4800000000010003)))
@@ -106,6 +112,34 @@ static bool patch(pid_t pid, const char *path, bool remove) {
                     std::memcpy(t + 14, mid, sizeof mid);
                     std::memcpy(t + 27, &back, 8);
                     tsize = 35;
+                    valid = true;
+                } else if (q.kind == 1 &&
+                           !std::memcmp(b, "\x55\x48\x89\xe5\x41\x56\x53\x80\x3d", 9) &&
+                           b[13] == 0) {
+                    // ReactTextShadowNode.UpdateLabel: relocate its RIP-relative guard.
+                    int32_t disp;
+                    std::memcpy(&disp, b + 9, 4);
+                    uint64_t cmp = q.method + 14 + disp, back = q.method + 14;
+                    std::memcpy(t, b, 7);
+                    t[7] = 0x49;
+                    t[8] = 0xbb;
+                    std::memcpy(t + 9, &cmp, 8);
+                    const unsigned char mid[] = {0x41, 0x80, 0x3b, 0, 0xff, 0x25, 0, 0, 0, 0};
+                    std::memcpy(t + 17, mid, sizeof mid);
+                    std::memcpy(t + 27, &back, 8);
+                    tsize = 35;
+                    valid = true;
+                } else if (q.kind == 3 &&
+                           !std::memcmp(
+                               b,
+                               "\x55\x48\x89\xe5\x41\x57\x41\x56\x53\x50\x48\x8b\x07\x49\x89\xd6",
+                               16)) {
+                    std::memcpy(t, b, 16);
+                    const unsigned char absjmp[] = {0xff, 0x25, 0, 0, 0, 0};
+                    std::memcpy(t + 16, absjmp, 6);
+                    uint64_t back = q.method + 16;
+                    std::memcpy(t + 22, &back, 8);
+                    tsize = 30;
                     valid = true;
                 } else if (q.kind == 2 &&
                            !std::memcmp(
@@ -179,9 +213,20 @@ int main() {
     if (!pid)
         return 1;
 #ifdef HLTB_NATIVE_REMOVE
+    // Let the frame callback dispose its sibling labels before restoring hooks.
+#ifndef HLTB_RENDER_PROBE
+    unlink("/system_tmp/hltb-native.enable");
+    usleep(400000);
+#endif
     bool a = patch(pid, HLTB_NATIVE_TEXT, true);
+#ifdef HLTB_RENDER_PROBE
+    if (a)
+        unlink(HLTB_NATIVE_TEXT);
+    return a ? 0 : 1;
+#else
     bool b = patch(pid, HLTB_NATIVE_UPDATE, true);
     return a && b ? 0 : 1;
+#endif
 #else
 #ifdef HLTB_NATIVE_RETRY
     if (!patch(pid, HLTB_NATIVE_TEXT, false))
@@ -212,11 +257,15 @@ int main() {
         return 1;
     }
 #endif
+#ifndef HLTB_RENDER_PROBE
     if (hltb_export_catalog())
         return 1;
+#endif
     unlink(HLTB_NATIVE_TEXT);
     unlink(HLTB_NATIVE_UPDATE);
+#ifndef HLTB_RENDER_PROBE
     unlink("/system_tmp/hltb-native.enable");
+#endif
     auto r =
         common_fps::ps5::inject_shellui_stable(pid, shell_native_blob, sizeof shell_native_blob);
     std::printf("native inject pid=%d attach=%d mapped=%d imports=%u unresolved=%u thread=%d "
@@ -228,10 +277,12 @@ int main() {
         return 1;
     if (!patch(pid, HLTB_NATIVE_TEXT, false))
         return 1;
+#ifndef HLTB_RENDER_PROBE
     if (!patch(pid, HLTB_NATIVE_UPDATE, false)) {
         (void)patch(pid, HLTB_NATIVE_TEXT, true);
         return 1;
     }
+#endif
 #ifdef HLTB_NATIVE_AUTOSTART
     FILE *enabled = std::fopen("/system_tmp/hltb-native.enable", "w");
     if (!enabled) {
@@ -239,9 +290,9 @@ int main() {
         return 1;
     }
     std::fclose(enabled);
-    std::puts("HowLongToBeat native title annotations enabled");
+    std::puts("HowLongToBeat native annotations enabled");
 #else
-    std::puts("Native title observer online; rendering remains disabled for inspection");
+    std::puts("Native observer online; rendering remains disabled for inspection");
 #endif
     return 0;
 #endif

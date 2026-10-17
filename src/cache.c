@@ -39,8 +39,10 @@ int hltb_cache_read(const char *title, hltb_result *out) {
     cJSON_ArrayForEach(row, j) {
         cJSON *t = cJSON_GetObjectItemCaseSensitive(row, "title"),
               *at = cJSON_GetObjectItemCaseSensitive(row, "timestamp"),
-              *data = cJSON_GetObjectItemCaseSensitive(row, "response");
-        if (cJSON_IsString(t) && !strcmp(t->valuestring, title) && cJSON_IsNumber(at) &&
+              *data = cJSON_GetObjectItemCaseSensitive(row, "response"),
+              *version = cJSON_GetObjectItemCaseSensitive(row, "version");
+        if (cJSON_IsNumber(version) && version->valueint == 2 && cJSON_IsString(t) &&
+            !strcmp(t->valuestring, title) && cJSON_IsNumber(at) &&
             at->valuedouble <= (double)time(NULL) &&
             at->valuedouble > (double)time(NULL) - 7 * 86400 && cJSON_IsObject(data)) {
             char *bytes = cJSON_PrintUnformatted(data);
@@ -66,6 +68,7 @@ int hltb_cache_write(const char *title, const hltb_result *r) {
             cJSON_DeleteItemFromArray(j, i);
     }
     cJSON *row = cJSON_CreateObject();
+    cJSON_AddNumberToObject(row, "version", 2);
     cJSON_AddStringToObject(row, "title", title);
     cJSON_AddNumberToObject(row, "timestamp", (double)time(NULL));
     cJSON *response = cJSON_AddObjectToObject(row, "response"),
@@ -74,6 +77,8 @@ int hltb_cache_write(const char *title, const hltb_result *r) {
     cJSON_AddNumberToObject(game, "game_id", r->game_id);
     cJSON_AddStringToObject(game, "game_name", r->game_name);
     cJSON_AddNumberToObject(game, "comp_main", r->main_seconds);
+    cJSON_AddNumberToObject(game, "comp_plus", r->extra_seconds);
+    cJSON_AddNumberToObject(game, "comp_100", r->completionist_seconds);
     cJSON_AddItemToArray(j, row);
     while (cJSON_GetArraySize(j) > CACHE_ENTRIES)
         cJSON_DeleteItemFromArray(j, 0);

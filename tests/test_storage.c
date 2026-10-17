@@ -15,12 +15,34 @@ int main(void) {
     assert(!chdir(temp));
     hltb_result r = {.game_id = 169267,
                      .game_name = "Resident Evil Requiem",
-                     .main_seconds = 39800},
+                     .main_seconds = 39800,
+                     .extra_seconds = 45000,
+                     .completionist_seconds = 72000},
                 out = {0};
     assert(hltb_cache_read("RESIDENT EVIL requiem", &out) == -1);
     assert(!hltb_cache_write("RESIDENT EVIL requiem", &r));
     assert(!hltb_cache_read("RESIDENT EVIL requiem", &out));
     assert(out.main_seconds == 39800 && out.game_id == 169267);
+    assert(out.extra_seconds == 45000 && out.completionist_seconds == 72000);
+    FILE *legacy = fopen("cache.json", "r");
+    assert(legacy);
+    char old_cache[8193];
+    size_t old_n = fread(old_cache, 1, sizeof old_cache - 1, legacy);
+    fclose(legacy);
+    old_cache[old_n] = 0;
+    cJSON *old_rows = cJSON_Parse(old_cache);
+    assert(old_rows);
+    cJSON_DeleteItemFromObjectCaseSensitive(cJSON_GetArrayItem(old_rows, 0), "version");
+    char *legacy_bytes = cJSON_PrintUnformatted(old_rows);
+    cJSON_Delete(old_rows);
+    assert(legacy_bytes);
+    legacy = fopen("cache.json", "w");
+    assert(legacy);
+    fputs(legacy_bytes, legacy);
+    fclose(legacy);
+    free(legacy_bytes);
+    assert(hltb_cache_read("RESIDENT EVIL requiem", &out) == -1);
+    assert(!hltb_cache_write("RESIDENT EVIL requiem", &r));
     assert(hltb_cache_read("Resident Evil 4", &out) == -1);
     const char *path = "cache.json";
     FILE *f = fopen(path, "w");

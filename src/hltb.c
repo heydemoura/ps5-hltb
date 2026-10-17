@@ -26,6 +26,13 @@ static void normalize(const char *s, char *out, size_t cap) {
     }
     out[n] = 0;
 }
+static unsigned optional_seconds(cJSON *item, const char *field) {
+    cJSON *value = cJSON_GetObjectItemCaseSensitive(item, field);
+    return cJSON_IsNumber(value) && isfinite(value->valuedouble) && value->valuedouble > 0 &&
+                   value->valuedouble <= 315360000
+               ? (unsigned)value->valuedouble
+               : 0;
+}
 int hltb_parse_result(const char *json, const char *title, hltb_result *out) {
     if (!json || !title || !out || !*title || strlen(title) > 500)
         return -1;
@@ -64,6 +71,8 @@ int hltb_parse_result(const char *json, const char *title, hltb_result *out) {
         out->game_id = id->valueint;
         strcpy(out->game_name, name->valuestring);
         out->main_seconds = (unsigned)secs->valuedouble;
+        out->extra_seconds = optional_seconds(item, "comp_plus");
+        out->completionist_seconds = optional_seconds(item, "comp_100");
         status = 0;
         break;
     }
@@ -117,4 +126,29 @@ int hltb_format_time(unsigned seconds, char *out, size_t size) {
     else
         n = snprintf(out, size, "Main Story: %um", mins);
     return n < 0 || (size_t)n >= size ? -1 : 0;
+}
+
+int hltb_format_metrics(const hltb_result *r, char *out, size_t size) {
+    if (!r || !out || !size)
+        return -1;
+    const char *names[] = {"Main Story", "Main + Extra", "Completionist"};
+    unsigned values[] = {r->main_seconds, r->extra_seconds, r->completionist_seconds};
+    size_t used = 0;
+    for (unsigned i = 0; i < 3; i++) {
+        char duration[64];
+        if (!values[i])
+            snprintf(duration, sizeof duration, "N/A");
+        else {
+            unsigned minutes = (values[i] + 30) / 60;
+            if (minutes >= 60)
+                snprintf(duration, sizeof duration, "%uh %02um", minutes / 60, minutes % 60);
+            else
+                snprintf(duration, sizeof duration, "%um", minutes);
+        }
+        int n = snprintf(out + used, size - used, "%s%s: %s", i ? "\n" : "", names[i], duration);
+        if (n < 0 || (size_t)n >= size - used)
+            return -1;
+        used += (size_t)n;
+    }
+    return 0;
 }

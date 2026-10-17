@@ -26,6 +26,20 @@ int main(void) {
     assert(!strcmp(label, "Main Story: 30m"));
     assert(hltb_format_time(0, label, sizeof label) == -1);
     assert(hltb_format_time(10000, label, 5) == -1);
+    assert(!hltb_parse_result("{\"data\":[{\"game_id\":1,\"game_name\":\"X\",\"comp_main\":3600,"
+                              "\"comp_plus\":7200,\"comp_100\":10800}]}",
+                              "X", &r));
+    assert(r.extra_seconds == 7200 && r.completionist_seconds == 10800);
+    char metrics[320];
+    assert(!hltb_format_metrics(&r, metrics, sizeof metrics));
+    assert(!strcmp(metrics, "Main Story: 1h 00m\nMain + Extra: 2h 00m\nCompletionist: 3h 00m"));
+    assert(hltb_format_metrics(&r, metrics, 8) == -1);
+    assert(!hltb_parse_result("{\"data\":[{\"game_id\":1,\"game_name\":\"X\",\"comp_main\":3600,"
+                              "\"comp_plus\":-1,\"comp_100\":1e300}]}",
+                              "X", &r));
+    assert(!r.extra_seconds && !r.completionist_seconds);
+    assert(!hltb_format_metrics(&r, metrics, sizeof metrics));
+    assert(strstr(metrics, "Main + Extra: N/A\nCompletionist: N/A"));
     char *body = hltb_search_body("A \"Quoted\" Game");
     assert(body);
     cJSON *root = cJSON_Parse(body);

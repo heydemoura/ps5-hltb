@@ -20,7 +20,7 @@ int main(void) {
         perror("disable");
         return 1;
     }
-    puts("Native title annotations disabled for subsequent text updates");
+    puts("Native annotations disabled");
 #else
     FILE *f = fopen("/system_tmp/hltb-native.enable", "w");
     if (!f) {
@@ -28,7 +28,7 @@ int main(void) {
         return 1;
     }
     fclose(f);
-    puts("Native title annotations enabled");
+    puts("Native annotations enabled");
 #endif
     return 0;
 }

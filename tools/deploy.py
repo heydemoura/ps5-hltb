@@ -8,7 +8,7 @@ p=argparse.ArgumentParser()
 p.add_argument('payload',type=Path)
 p.add_argument('--host',default='192.168.0.190')
 p.add_argument('--port',type=int,default=9021)
-p.add_argument('--expect',default='HowLongToBeat native title annotations enabled')
+p.add_argument('--expect',default='HowLongToBeat native annotations enabled')
 a=p.parse_args()
 chunks=[]
 with socket.create_connection((a.host,a.port),timeout=10) as s:
