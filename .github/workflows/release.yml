@@ -24,7 +24,7 @@ jobs:
     env:
       SDK_VERSION: v0.44
       SDK_SHA256: 4d06eab777bb135705b5a6816688c9132efb246093fe606ac488ab6cf65ca5b0
-      LLVM_CONFIG: llvm-config-18
+      LLVM_CONFIG: /usr/bin/llvm-config-18
       HOST_CC: clang-18
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
