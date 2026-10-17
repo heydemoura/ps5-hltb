@@ -163,3 +163,163 @@ right and requested committing these changes.
 A second live PS5 lookup for Astro Bot returned Main Story `11h 06m`,
 Main + Extra `15h 12m`, and Completionist `18h 31m`. Both live queries and all
 host tests passed before the final commit.
+
+
+## Game-switch crash investigation
+
+The user reported a console crash after approximately four game switches after
+loading main commit `ab093b8`. The retained log showed annotations for Resident
+Evil Requiem, Mario Kart 8 Deluxe and Marvel's Wolverine on ShellUI PID 314;
+that process no longer existed when inspected. No crash stack was available,
+so the exact faulting instruction is unknown.
+
+Source inspection found retention of up to 16 old controls and their ancestor
+paths, a 64-entry pinned event queue, panel recreation on identical text updates,
+and boxed managed Boolean allocations every frame for every retained control.
+The lookup worker also stayed attached to Mono while blocking in native HTTPS.
+These are lifecycle hazards; their presence alone does not prove the crash cause.
+
+The replacement tracks one active control and one latest pending event, invalidates
+old selections by generation, releases replaced handles, rejects foreign threads
+before managed observation, and reuses the panel for identical control updates.
+A native scalar disposal getter avoids per-frame boxing. Widget construction,
+attachment and cleanup remain on the UI thread. Cleanup detaches each owned child
+before disposing it, and skips native operations on failed constructors. The one
+lookup worker detaches from Mono after initialization, coalesces navigation, and
+never mutates widgets. Disable polling is on the UI frame, independent of a
+blocked lookup.
+
+Successful estimates now persist in `/user/hltb/cache.json` for exactly 30 days.
+File cache hits take priority over HTTPS; memory entries retain the original
+expiry instead of extending it. The bounded file holds up to 512 records / 1 MiB
+without evicting valid entries and migrates the previous temporary cache.
+The query diagnostic follows the same cache-first behavior.
+
+Host sanitizer tests exercise 2,000 game switches, 100,000 coalesced events,
+identical update reuse, foreign-thread rejection, handle allocation failures,
+and full disable cleanup using the actual renderer hooks with a mock widget
+adapter. This is lifecycle evidence, not proof of Sony renderer stability.
+Storage tests check values beyond seven days, the 30-day expiry boundary,
+future timestamps, and more than 16 retained valid records. HTTP tests account
+for all request, template, HTTP, TLS and network-pool resources over 1,000
+lookups, including failures during initialization and request setup.
+
+Console switching validation is pending on the updated payload.
+
+
+### Confirmed failure and scene-root fix
+
+A native debugger captured SIGABRT at Mono's unhandled-exception path. A
+breakpoint at that path captured the outer exception and its inner exception:
+
+```text
+ReactNative.Vsh.Common.RenderScene+ReactApplicationRenderSceneAggregateException
+Cannot fallback to original bundle
+  System.InvalidOperationException
+  Could not get tag for view.
+```
+
+This is concrete evidence of a React view-registry failure, rather than a
+network-resource failure. Native logs show previous panel disposal completed;
+one reproduction used file cache hits for both games. Changing ReactPanel to a
+plain PUI Panel while retaining the old parent did not prevent the failure.
+The missing React tag is consistent with an unregistered custom child inside
+a subtree managed by React's native view hierarchy.
+
+The renderer now resolves `Widget.get_ParentScene()` and
+`Scene.get_RootWidget()`. It verifies that this native scene root is an ancestor
+of the current source and is not a React class, then attaches the metrics panel
+as a sibling of the React content tree. The retained, bounded current-source
+ancestry is used only to translate coordinates and visibility into that native
+root. No synthetic React tag or registry entry is created.
+
+Games without a Time played label now get a title-based fallback after six UI
+frames. The panel uses the current title's scene and font configuration, native
+Label default size, white text, and the verified padding/background/radius.
+A real played-time update replaces this fallback. No previous game tree is
+retained for fallback styling. ASTRO BOT was reported by the user as an example
+with no Time played control; ProsperoEden has no matching HLTB result and is
+expected to remain without completion estimates.
+
+The host runtime adapter rejects appending an untagged widget under a simulated
+React-managed view, exercises scene-root placement, cold-start fallback and
+replacement by played time, as well as the prior stress/cleanup checks. The
+final host run retained at most 16 handles in this fixture. Native scene paths
+may contain more ancestors, but are bounded to 48 and released on each selection.
+Temporary fatal callbacks and standard-stream redirection used during the
+investigation were removed from the final payload.
+
+The user confirmed “It is not crashing anymore.” On ShellUI PID 373 the scene-root
+build continued through 42 selection changes, including ASTRO BOT, Resident Evil
+Requiem, ProsperoEden, Mario Kart 8 Deluxe and other titles. Runtime counters
+showed at most one panel remaining active (30 created / 29 removed at the
+42-selection checkpoint) and a handle peak of 33, instead of growth by game.
+
+A native worker probe established that `/data` is not mounted inside ShellUI
+(`stat` returns ENOENT), while creating and writing `/user/hltb` succeeds and is
+visible to the privileged read-only probe. The final cache therefore uses
+`/user/hltb/cache.json`; no directory-descriptor transfer or credential change
+is necessary. An ASTRO BOT diagnostic returned `Source: file cache` and left
+the persistent file's SHA-256 unchanged, preserving the original timestamp.
+
+The first title-only fallback exposed a visibility issue when games use logo
+artwork and leave the title text Label hidden. The final panel follows the
+native scene's visibility instead of title/played-time controls. The user
+confirmed that games without played time still require Play Game focus. It explicitly constructs a native 24 px
+UIFont. Native `GetTextHeight` and `GetLineCount` measure all three lines after
+layout, updating both text and background dimensions; an initial generous
+height and FitHeightToText avoid clipping while layout settles.
+
+The user confirmed all three lines fit. Fresh persistent cache writes were
+observed, bringing the cache to eight entries. Visibility before Play Game focus
+remains unresolved.
+
+During the subsequent unfocused ASTRO BOT scene inspection, the user reported
+a full console crash. The injected diagnostic invoked scene/widget getters
+from an attached worker, outside the renderer UI callback. Deployment timed
+out and the HTTP log endpoint became unreachable; no exception or crash dump
+was recovered. The diagnostic is a suspected trigger, not a proven cause.
+Do not repeat this worker-based inspection. Any further managed UI inspection
+must run through the existing UI callback with bounded lifetime and retained
+objects. Previous game-switch stability does not establish stability of this
+diagnostic build or resolve the new full-console failure.
+
+Offline follow-up after the full-console failure: the worker now detaches from
+Mono on initialization failure as well as before normal network operation. The
+host adapter asserts UI ownership for handle creation, widget allocation and
+managed invocation. Ten injected managed failures cover style, text, scene
+lookup, sizing and both child-attachment stages; disabling afterward leaves
+zero handles and no attached panel. Panel removal counters now count only
+previously successful panel constructions. ASan/UBSan tests pass; these checks
+do not establish the cause of the full-console failure or prove console
+stability. The updated payload has not been deployed pending console recovery.
+
+A UI-thread-only scene trace after reboot confirmed per-game ReactScene and
+ReactNavigationScene instances beneath a shared AppScene. All reported visible,
+but a focus transition changed the game root final opacity. The user still
+observed metrics only on Play Game. At the user’s suggestion, the next build
+uses fixed lower-right placement, preferring the nearest shared AppScene native
+RootWidget. Source ancestry remains retained and validated against its original
+root, separately from the screen host; both are released per selection. Host
+tests exercise a faded original scene, visible shared host and complete cleanup.
+The fixed-position build is deployed on PID 62; visual and switching verification
+are pending. The earlier worker-based scene probe has not been run again.
+
+The user confirmed fixed-screen placement works. Both played and unplayed games
+now use the same metrics style and construction path: title FontConfig, explicit
+24 px UIFont, white text, translucent background, 15 px radius, 24/13 px padding
+and measured three-line height. The previous played-control style/background
+copying and child enumeration were removed. Revealing played time reuses the
+existing panel rather than replacing it. The temporary scene-chain trace was
+removed; bounded host discovery stays on the UI thread. Host tests verify shared
+host placement, unchanged panel identity when played time appears, failure cleanup
+and bounded resources. Visual verification of the unified styling is pending.
+
+PR screenshot verification: the user saved a native home-screen capture with
+ASTRO BOT selected and Play Game unfocused. Retrieved capture
+`20261017_151503_00158173.jxr` from the console media gallery and decoded it
+locally with jxrlib. The README PNG is an SDR rendering of that HDR capture at
+1920×1080; no UI content was added or removed. It visibly contains all three
+metrics and the unfocused Play Game button. The latest native log remained on
+PID 62 across 18 selections, with one active panel (12 created / 11 removed),
+28 current handles and peak 33. `make all test` passed before PR publication.

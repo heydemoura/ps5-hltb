@@ -8,11 +8,12 @@ p=argparse.ArgumentParser()
 p.add_argument('payload',type=Path)
 p.add_argument('--host',default='192.168.0.190')
 p.add_argument('--port',type=int,default=9021)
+p.add_argument('--timeout',type=float,default=60)
 p.add_argument('--expect',default='HowLongToBeat native annotations enabled')
 a=p.parse_args()
 chunks=[]
 with socket.create_connection((a.host,a.port),timeout=10) as s:
-    s.settimeout(60)
+    s.settimeout(a.timeout)
     s.sendall(a.payload.read_bytes())
     s.shutdown(socket.SHUT_WR)
     while data:=s.recv(16384):
