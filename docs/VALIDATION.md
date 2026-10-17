@@ -107,3 +107,20 @@ The storage tests additionally exercised 40 long-title writes, checking that
 the cache stayed within 8192 bytes, enforced the entry limit, and rejected an
 expired entry. The deployment helper checks the payload's success message and
 returns a failure if installation does not complete.
+
+## Final release switching confirmation
+
+After deploying the exact v0.1.0 single-file payload, the user switched between
+RESIDENT EVIL requiem and ASTRO BOT and confirmed: “Both show their times.”
+The native log independently recorded both annotations through the title setter:
+
+```text
+RESIDENT EVIL requiem  |  Main Story: 11h 03m
+ASTRO BOT  |  Main Story: 11h 06m
+```
+
+The renderer remained enabled with 31 catalog entries and an advancing frame
+counter. The final storage check reported 64 KiB free in `/system_tmp`.
+Published ELF assets were downloaded and their SHA-256 checksums matched the
+local release artifacts. This confirmation updates documentation only; the
+published v0.1.0 binaries remain unchanged.
