@@ -43,13 +43,15 @@ objects; disabling disposes the panel and label before hooks are removed.
 
 Host parsing and storage tests pass with AddressSanitizer and
 UndefinedBehaviorSanitizer. The new observer and guarded native hooks have
-been exercised on the console. Visual validation of the sibling renderer,
-game switching and removal is still pending; this branch is not yet a release.
+been exercised on the console. After the final game-switching and Play Game
+focus check was requested, the user confirmed: “It works, commit the current
+state.” This validates the deployed sibling-container implementation at commit
+`e9f1d8a`. This branch has not been published as a release.
 
 The initial sibling-label insertion was logged with the original `9m` value
 intact, but the user did not see the completion. Process enumeration established
 that ShellUI restarted (PID 101 to 274). Therefore that insertion log is not
-proof of a working renderer. Rendering is disabled during the bounds/clipping
+proof of a working renderer. Rendering was disabled during that bounds/clipping
 investigation. Managed arguments, the target parent, the selected root and the
 new text are now retained with pinned GC handles across managed calls; the
 cause of the restart is not yet established.
@@ -88,8 +90,8 @@ completion. Memory inspection established:
 - Disabling removed the extra native child and restored the row's three original
   children. Frame execution continued normally.
 
-This evidence does not prove on-screen visibility. Rendering is disabled while
-that discrepancy is investigated. `tools/native_status.py` now rejects stale
+At this stage, that evidence did not prove on-screen visibility. Rendering was
+disabled while the discrepancy was investigated. `tools/native_status.py` now rejects stale
 requests when their recorded ShellUI PID no longer has a readable memory map.
 
 ## Draw observer and container expansion
@@ -108,7 +110,8 @@ occupies the added space within the same row. Native world coordinates confirm
 the played-time label stays at `(1701,875)` while the new label is at
 `(1295,875)`. Geometry snapshots retain original values for disable/removal.
 This is a visibility experiment; a narrow wrapper or intermediate render target
-has not yet been established as the cause. User-visible confirmation is pending.
+was not established as the cause. The user subsequently confirmed this
+experiment was visible, as recorded below.
 
 ## User feedback incorporated
 
@@ -117,4 +120,8 @@ for more left padding, a vertical stack above played time, and a separate
 sibling container because focusing Play Game causes the original wrapper to
 rerender and change dimensions. The current implementation above replaces the
 expansion experiment and does not resize or reposition original shell widgets.
-Focus-transition and game-switching visual checks are pending.
+The user subsequently confirmed the final version works after being asked to
+switch away and back, then focus Play Game to check the stack, padding and
+preservation of the original played-time control. The final implementation is
+committed on `feature/playtime-container`; the earlier expansion experiment is
+retained here only as investigation history.

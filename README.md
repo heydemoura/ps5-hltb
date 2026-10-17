@@ -7,9 +7,9 @@ of the played-time control. The completion stacks above played time, uses the
 same font and color, and follows the control through focus/layout changes.
 The original played-time wrapper and game title are preserved.
 
-**Development status:** the component and UI thread are verified on firmware
-12.20. A same-row experiment was confirmed visible. The separate sibling
-container and stacked layout are now undergoing console validation. See [played-time investigation](docs/PLAYTIME.md).
+**Validated on firmware 12.20:** the user confirmed the sibling-container version
+works after the game-switching and Play Game focus check. See
+[validation and investigation](docs/PLAYTIME.md).
 The stable title-annotation version remains on `main` and release `v0.1.0`.
 
 Queries use game titles and run directly from the console over verified HTTPS.
