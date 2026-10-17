@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <time.h>
 #include <unistd.h>
 int main(void) {
     char temp[] = "/tmp/hltb-storage-XXXXXX";
@@ -24,6 +25,34 @@ int main(void) {
     assert(!hltb_cache_read("RESIDENT EVIL requiem", &out));
     assert(out.main_seconds == 39800 && out.game_id == 169267);
     assert(out.extra_seconds == 45000 && out.completionist_seconds == 72000);
+    /* Keep disk values beyond the old seven-day TTL; expire exactly at 30 days. */
+    for (int age = 0; age < 4; age++) {
+        FILE *cf = fopen("cache.json", "r");
+        assert(cf);
+        char input[4096];
+        size_t count = fread(input, 1, sizeof input - 1, cf);
+        fclose(cf);
+        input[count] = 0;
+        cJSON *rows = cJSON_Parse(input);
+        assert(rows);
+        time_t now = time(NULL);
+        int ages[] = {8 * 86400, HLTB_CACHE_TTL - 60, HLTB_CACHE_TTL, -60};
+        cJSON_SetNumberValue(cJSON_GetObjectItemCaseSensitive(cJSON_GetArrayItem(rows, 0),
+                                                           "timestamp"), now - ages[age]);
+        char *output = cJSON_PrintUnformatted(rows);
+        cJSON_Delete(rows);
+        cf = fopen("cache.json", "w");
+        assert(cf && output);
+        fputs(output, cf);
+        fclose(cf);
+        free(output);
+        time_t expires = 0;
+        int rc = hltb_cache_read_until("RESIDENT EVIL requiem", &out, &expires);
+        assert(age < 2 ? rc == 0 : rc != 0);
+        if (age < 2)
+            assert(expires == now - ages[age] + HLTB_CACHE_TTL);
+    }
+    assert(!hltb_cache_write("RESIDENT EVIL requiem", &r));
     FILE *legacy = fopen("cache.json", "r");
     assert(legacy);
     char old_cache[8193];
@@ -62,7 +91,8 @@ int main(void) {
     fputs("trailing garbage", f);
     fclose(f);
     assert(hltb_catalog_read("catalog.bin", read, 2) == 0);
-    // Long titles and repeated lookups must not exhaust the console's tiny RAM disk.
+    assert(!hltb_cache_write("RESIDENT EVIL requiem", &r));
+    // More than 16 valid titles must survive without eviction, within a bounded file.
     for (int i = 0; i < 40; i++) {
         char title[480];
         memset(title, 'A', 440);
@@ -72,17 +102,18 @@ int main(void) {
         assert(!hltb_cache_read(title, &out));
         struct stat st;
         assert(!stat(path, &st));
-        assert(st.st_size <= 8192);
+        assert(st.st_size <= HLTB_CACHE_BYTES);
     }
     f = fopen(path, "r");
     assert(f);
-    char bytes[8193];
+    char bytes[HLTB_CACHE_BYTES + 1];
     size_t n = fread(bytes, 1, sizeof bytes - 1, f);
     fclose(f);
     bytes[n] = 0;
     cJSON *cache = cJSON_Parse(bytes);
     assert(cJSON_IsArray(cache));
-    assert(cJSON_GetArraySize(cache) <= 16);
+    assert(cJSON_GetArraySize(cache) == 41);
+    assert(!hltb_cache_read("RESIDENT EVIL requiem", &out));
     cJSON *latest = cJSON_GetArrayItem(cache, cJSON_GetArraySize(cache) - 1);
     cJSON *title = cJSON_GetObjectItemCaseSensitive(latest, "title");
     assert(cJSON_IsString(title));
@@ -98,6 +129,23 @@ int main(void) {
     fclose(f);
     free(old);
     assert(hltb_cache_read(expired, &out) == -1);
+    /* Every catalog entry fits; a 513th record must preserve the existing file. */
+    unlink(path);
+    for (unsigned i = 0; i < HLTB_CACHE_ENTRIES; i++) {
+        char name[32];
+        snprintf(name, sizeof name, "Game %u", i);
+        strcpy(r.game_name, name);
+        assert(!hltb_cache_write(name, &r));
+    }
+    for (unsigned i = 0; i < HLTB_CACHE_ENTRIES; i++) {
+        char name[32];
+        snprintf(name, sizeof name, "Game %u", i);
+        assert(!hltb_cache_read(name, &out));
+    }
+    strcpy(r.game_name, "Overflow");
+    assert(hltb_cache_write("Overflow", &r) == -1);
+    assert(!hltb_cache_read("Game 0", &out));
+    assert(!hltb_cache_read("Game 511", &out));
     unlink(path);
     unlink("catalog.bin");
     assert(!chdir("/"));

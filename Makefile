@@ -26,9 +26,11 @@ deploy: build/hltb.elf
 
 HOST_CC ?= cc
 .PHONY: test deploy
-test: build/test-hltb build/test-storage
+test: build/test-hltb build/test-storage build/test-runtime build/test-http
 	./build/test-hltb
 	./build/test-storage
+	./build/test-runtime
+	./build/test-http
 build/test-hltb: tests/test_hltb.c src/hltb.c third_party/cJSON/cJSON.c src/hltb.h
 	mkdir -p build
 	$(HOST_CC) -Wno-deprecated-declarations -Wall -Wextra -Werror -g -fsanitize=address,undefined -Isrc -Ithird_party/cJSON -o $@ $(filter %.c,$^)
@@ -71,7 +73,7 @@ build:
 build/shell_probe.elf build/shell_trace.elf build/loader-bridge.o build/loader-pt.o build/catalog-probe.elf: | build
 
 NATIVE_SOURCES := src/cache.c src/playtime_native.c src/catalog.c src/catalog_snapshot.c src/hltb.c src/http_ps5.c third_party/cJSON/cJSON.c
-build/shell_native.elf: $(NATIVE_SOURCES) src/native_protocol.h src/root_ca.h | build
+build/shell_native.elf: $(NATIVE_SOURCES) src/native_protocol.h src/root_ca.h src/cache.h src/hltb.h src/catalog.h | build
 	$(CC) -shared -Wl,--unresolved-symbols=ignore-all -nostartfiles -nodefaultlibs -fPIC -fno-stack-protector -O2 -Wno-unreachable-code-generic-assoc -Isrc -Ithird_party/cJSON -Wl,-e,elf_main -Wl,-Bsymbolic -Wl,--hash-style=sysv -Wl,-z,now -o $@ $(NATIVE_SOURCES) -lkernel_sys -lSceLibcInternal -lSceNet -lSceSsl -lSceHttp2
 build/shell_native_blob.h: build/shell_native.elf
 	python3 -c 'from pathlib import Path; b=Path("$<").read_bytes(); Path("$@").write_text("static const unsigned char shell_native_blob[]={"+",".join(map(str,b))+"};\n")'
@@ -147,3 +149,9 @@ inject-render-probe: build/inject-render-probe.elf
 	$(PS5_DEPLOY) -h $(PS5_HOST) -p $(PS5_PORT) $<
 remove-render-probe: build/remove-render-probe.elf
 	$(PS5_DEPLOY) -h $(PS5_HOST) -p $(PS5_PORT) $<
+
+build/test-runtime: tests/test_runtime.c src/playtime_native.c src/cache.h src/native_protocol.h | build
+	$(HOST_CC) -O1 -Wall -Wextra -Werror -Wno-unused-function -g -fsanitize=address,undefined -Isrc -o $@ tests/test_runtime.c -lpthread
+
+build/test-http: tests/test_http.c src/http_ps5.c src/hltb.c src/hltb.h third_party/cJSON/cJSON.c | build
+	$(HOST_CC) -Wno-deprecated-declarations -Wall -Wextra -Werror -g -fsanitize=address,undefined -Isrc -Ithird_party/cJSON -o $@ tests/test_http.c src/hltb.c third_party/cJSON/cJSON.c

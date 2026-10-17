@@ -2,13 +2,18 @@
 
 This PS5 ELF payload adds
 **HowLongToBeat Main Story, Main + Extra and Completionist times** alongside the shell's **Time played**
-control. It creates a native `SceShellUI` Label in its own container, as a sibling
-of the played-time control. The completion stacks above played time, uses the
-same font and color, and follows the control through focus/layout changes.
+control. It creates a native `SceShellUI` Label in its own scene-root container,
+outside React's managed view tree. One shared metrics component uses native
+label typography at a fixed screen position on the right. Games with and without played time use the same appearance and layout.
 The original played-time wrapper and game title are preserved.
 
-**Validated on firmware 12.20:** the user confirmed the sibling-container version
-works after the game-switching and Play Game focus check. See
+![ASTRO BOT showing all three completion metrics with Play Game unfocused](docs/screenshots/astro-bot-metrics.png)
+
+*Captured on firmware 12.20; games without played time use the same metrics panel.*
+
+**Firmware 12.20:** the earlier sibling-container version was visually validated
+but later crashed during repeated game switching. This branch fixes native scene
+ownership and bounds runtime resources; the user confirmed repeated switching no longer crashes. See
 [validation and investigation](docs/PLAYTIME.md).
 The earlier title-annotation version is available in release `v0.1.0`.
 
@@ -33,8 +38,9 @@ title catalog, injects the native renderer, validates and installs the native
 hooks, then enables annotations. Send this ELF to elfldr with any compatible
 payload sender. No additional files need to be copied onto the console.
 
-Highlight a game with a visible Time played control. The shell's native label
-update identifies the control. Cached results can display immediately; new
+Highlight a game. The shell's native label update identifies the selected title
+and, when available, its Time played control. File-cached results display after
+the background cache check; new
 lookups run in the background, and a UI frame applies a completed result.
 
 Example:
@@ -60,15 +66,26 @@ Completionist: 31h 51m
 - Uses verified TLS with an embedded GlobalSign Root R46 certificate. The
   unofficial website API can change, and strict title matching can miss
   localized names or edition differences.
-- Caches successful results for up to seven days under
-  `/system_tmp/hltb-cache.json`. The disk cache keeps at most 16 entries in
-  8 KiB; live results also stay in memory. The console can clear temporary
-  files on reboot. Logs are bounded to fit the console's small temporary
-  filesystem. No saved game or application database is edited.
-- Metrics appear on three lines using the played-time label's native component,
-  font and color. The panel copies the played-time background color, corner
-  radius and vertical padding, with 24 px horizontal padding on each side. Unavailable extra/completionist estimates display `N/A`.
-  The existing game title and played-time text are preserved.
+- Caches successful results for 30 days under `/user/hltb/cache.json`, including
+  across reboots. Valid file entries are displayed without a network lookup.
+  The cache is bounded to 512 entries and 1 MiB and preserves unexpired records;
+  an older `/system_tmp/hltb-cache.json` is migrated on first use. In-memory
+  results share the file's expiry. Logs stay bounded in temporary storage.
+  ShellUI can access this `/user` path; its sandbox does not mount `/data`.
+  No saved game or application database is edited.
+- Tracks one current game's UI control and coalesces pending updates. Game
+  switches release the previous control and its ancestor handles on the UI
+  thread. Identical control updates reuse the metrics panel. A single worker
+  debounces navigation and performs at most one lookup at a time; it stays
+  detached from Mono during network calls.
+- Metrics appear on three lines using one native Label/Panel component for all
+  games: native 24 px typography, white text, translucent black background,
+  15 px corner radius, 24 px horizontal and 13 px vertical padding. Revealing
+  played time reuses the existing metrics panel. Unavailable extra/completionist
+  estimates display `N/A`.
+  The three-line height is measured by the native renderer, and the scene keeps
+  metrics visible independently of Play Game focus. The existing game title
+  and played-time text are preserved.
 - Firmware 12.20 is the only firmware tested. This is an experimental homebrew
   payload. The resident code lasts until ShellUI restarts or the console reboots.
   Loading a duplicate into the same ShellUI is refused.
@@ -82,7 +99,8 @@ python3 tools/query.py 'ASTRO BOT' --host 192.168.0.190
 ```
 
 It accepts a title on stdin or as command-line arguments when started through
-an elfldr URI. It performs a live lookup and also seeds the console cache.
+an elfldr URI. It reads the file cache first and performs a live lookup only
+when no unexpired entry exists, then stores the result.
 
 Additional development targets:
 
