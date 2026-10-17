@@ -134,3 +134,16 @@ build/inspect-layout.elf: tools/inject_probe.cpp $(LOADER)/stable_shellui_inject
 	$(CXX) -DHLTB_LAYOUT_PROBE -std=c++20 -O2 -Ibuild -I$(LOADER) -I$(SHSRV) -o $@ $(filter %.cpp %.o,$^)
 inspect-layout: build/inspect-layout.elf
 	$(PS5_DEPLOY) -h $(PS5_HOST) -p $(PS5_PORT) $<
+
+build/render_probe.elf: src/render_probe.c src/native_protocol.h | build
+	$(CC) -DHLTB_RENDER_PROBE -shared -Wl,--unresolved-symbols=ignore-all -nostartfiles -nodefaultlibs -fPIC -fno-stack-protector -O2 -Isrc -Wl,-e,elf_main -Wl,-Bsymbolic -Wl,--hash-style=sysv -Wl,-z,now -o $@ $< -lkernel_sys -lSceLibcInternal
+build/render_probe_blob.h: build/render_probe.elf
+	python3 -c 'from pathlib import Path; b=Path("$<").read_bytes(); Path("$@").write_text("static const unsigned char render_probe_blob[]={"+",".join(map(str,b))+"};\n")'
+build/inject-render-probe.elf: tools/inject_native.cpp $(LOADER)/stable_shellui_injector.cpp $(LOADER)/remote_call.cpp build/loader-bridge.o build/loader-pt.o build/render_probe_blob.h src/native_protocol.h
+	$(CXX) -DHLTB_RENDER_PROBE -std=c++20 -O2 -Isrc -Ibuild -I$(LOADER) -I$(SHSRV) -o $@ $(filter %.cpp %.o,$^)
+build/remove-render-probe.elf: tools/inject_native.cpp $(LOADER)/stable_shellui_injector.cpp $(LOADER)/remote_call.cpp build/loader-bridge.o build/loader-pt.o build/render_probe_blob.h src/native_protocol.h
+	$(CXX) -DHLTB_RENDER_PROBE -DHLTB_NATIVE_REMOVE -std=c++20 -O2 -Isrc -Ibuild -I$(LOADER) -I$(SHSRV) -o $@ $(filter %.cpp %.o,$^)
+inject-render-probe: build/inject-render-probe.elf
+	$(PS5_DEPLOY) -h $(PS5_HOST) -p $(PS5_PORT) $<
+remove-render-probe: build/remove-render-probe.elf
+	$(PS5_DEPLOY) -h $(PS5_HOST) -p $(PS5_PORT) $<

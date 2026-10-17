@@ -6,6 +6,7 @@
 #include <pthread.h>
 #include <stdarg.h>
 #include <stdatomic.h>
+#include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -77,7 +78,7 @@ static int parent_off, root_off, disposed_off, span_off, test_off, children_off;
 static int span_id_off, span_outer_off, span_inner_off;
 static Method *label_display;
 struct event {
-    uint32_t node, label;
+    uint32_t node, label, title;
     int index;
     uintptr_t thread;
 };
@@ -85,7 +86,7 @@ static struct event ring[64];
 static atomic_uint write_index, read_index;
 static atomic_flag producer_guard = ATOMIC_FLAG_INIT;
 static int selected_index = -1;
-static uint32_t selected_root_handle;
+static uint32_t selected_root_handle, selected_title_handle;
 static int find_game(const char *s) {
     for (size_t i = 0; i < game_count; i++)
         if (!strcmp(s, games[i].title))
@@ -182,6 +183,9 @@ static void text_hook(void *node, void *label) {
     int index = s ? find_game(s) : -1;
     if (string_is(ptr(node, test_off), "post-cover-concept-name")) {
         selected_index = index;
+        if (selected_title_handle)
+            mono_gchandle_free(selected_title_handle);
+        selected_title_handle = mono_gchandle_new(label, 1);
         if (selected_root_handle)
             mono_gchandle_free(selected_root_handle);
         void *root = ptr(node, root_off);
@@ -197,15 +201,21 @@ static void text_hook(void *node, void *label) {
         unsigned w = atomic_load_explicit(&write_index, memory_order_relaxed);
         unsigned r = atomic_load_explicit(&read_index, memory_order_acquire);
         if (w - r < 64) {
+            void *title =
+                selected_title_handle ? mono_gchandle_get_target(selected_title_handle) : NULL;
             uint32_t nh = mono_gchandle_new(node, 1), lh = mono_gchandle_new(label, 1);
-            if (nh && lh) {
-                ring[w % 64] = (struct event){nh, lh, selected_index, (uintptr_t)pthread_self()};
+            uint32_t th = title ? mono_gchandle_new(title, 1) : 0;
+            if (nh && lh && th) {
+                ring[w % 64] =
+                    (struct event){nh, lh, th, selected_index, (uintptr_t)pthread_self()};
                 atomic_store_explicit(&write_index, w + 1, memory_order_release);
             } else {
                 if (nh)
                     mono_gchandle_free(nh);
                 if (lh)
                     mono_gchandle_free(lh);
+                if (th)
+                    mono_gchandle_free(th);
             }
         }
         log_event("played title=%s text=%s node=%p label=%p class=%s thread=%lx\n",
@@ -220,19 +230,28 @@ static void text_hook(void *node, void *label) {
 }
 
 /* All widget construction, mutation and disposal occurs in Application.Update. */
-static Class *label_class;
-static Method *label_ctor, *label_text, *label_parent, *label_disposed;
+static Class *label_class, *panel_class;
+static Method *label_ctor, *panel_ctor, *label_text, *label_parent, *label_disposed, *measure_text;
 static Method *append_child, *remove_child, *dispose_label;
-static Method *get_x, *get_y, *get_height, *set_x, *set_y, *set_width, *set_height;
+static Method *get_x, *get_y, *get_width, *get_height, *set_x, *set_y, *set_width, *set_height;
+static float (*native_x)(void *), (*native_y)(void *), (*native_width)(void *),
+    (*native_height)(void *);
+static float (*native_opacity)(void *), (*native_final_opacity)(void *);
+static void *(*native_parent)(void *);
+static bool (*native_shown)(void *), (*native_visible)(void *);
+static void (*native_set_x)(void *, float), (*native_set_y)(void *, float);
+static void (*native_set_opacity)(void *, float), (*native_set_visible)(void *, bool);
 struct style_property {
     Method *get, *set;
     int reference;
 };
 static struct style_property styles[3];
 struct tracked {
-    uint32_t node, source, annotation;
-    int index;
-    int rendered;
+    uint32_t node, source, title, annotation, container, attach_parent;
+    uint32_t path[12];
+    unsigned path_count;
+    int index, rendered, measure_attempts, measure_ready;
+    float panel_width, panel_height, line_height;
 };
 static struct tracked tracked[16];
 static Method *method_inherited(Class *c, const char *name, int count) {
@@ -289,16 +308,109 @@ static int copy_style(void *source, void *target) {
     }
     return 1;
 }
+static void release_anchors(struct tracked *t) {
+    for (unsigned n = 0; n < t->path_count; n++)
+        mono_gchandle_free(t->path[n]);
+    t->path_count = 0;
+    if (t->attach_parent)
+        mono_gchandle_free(t->attach_parent);
+    t->attach_parent = 0;
+}
 static void remove_annotation(struct tracked *t) {
-    void *obj = t->annotation ? mono_gchandle_get_target(t->annotation) : NULL;
-    if (obj && !is_disposed(obj)) {
-        (void)call(remove_child, obj, NULL, NULL);
-        (void)call(dispose_label, obj, NULL, NULL);
+    void *container = t->container ? mono_gchandle_get_target(t->container) : NULL;
+    void *label = t->annotation ? mono_gchandle_get_target(t->annotation) : NULL;
+    if (container && !is_disposed(container)) {
+        (void)call(remove_child, container, NULL, NULL);
+        (void)call(dispose_label, container, NULL, NULL);
     }
+    if (label && !is_disposed(label))
+        (void)call(dispose_label, label, NULL, NULL);
+    if (t->container)
+        mono_gchandle_free(t->container);
     if (t->annotation)
         mono_gchandle_free(t->annotation);
-    t->annotation = 0;
+    t->container = t->annotation = 0;
     t->rendered = 0;
+    release_anchors(t);
+}
+/* Use the native common ancestor with the game title, outside the played-time
+ * control's private wrappers, regardless of their focus-dependent dimensions. */
+static int capture_anchors(struct tracked *t, void *source) {
+    release_anchors(t);
+    void *title = mono_gchandle_get_target(t->title);
+    if (!title || is_disposed(title))
+        return 0;
+    uint32_t title_path[48] = {0};
+    unsigned title_count = 0;
+    void *obj = native_parent(title);
+    while (obj && title_count < 48) {
+        uint32_t handle = mono_gchandle_new(obj, 1);
+        if (!handle)
+            break;
+        title_path[title_count++] = handle;
+        obj = native_parent(obj);
+    }
+    void *parent = native_parent(source);
+    for (unsigned depth = 0; parent && depth < 12; depth++) {
+        uint32_t handle = mono_gchandle_new(parent, 1);
+        if (!handle)
+            break;
+        int common = 0;
+        for (unsigned n = 0; n < title_count; n++)
+            if (mono_gchandle_get_target(title_path[n]) == parent)
+                common = 1;
+        if (common && t->path_count) {
+            t->attach_parent = handle;
+            break;
+        }
+        t->path[t->path_count++] = handle;
+        parent = native_parent(parent);
+    }
+    for (unsigned n = 0; n < title_count; n++)
+        mono_gchandle_free(title_path[n]);
+    if (t->attach_parent)
+        return 1;
+    release_anchors(t);
+    return 0;
+}
+static int position_container(struct tracked *t) {
+    void *source = mono_gchandle_get_target(t->source);
+    void *container = mono_gchandle_get_target(t->container);
+    void *parent = t->attach_parent ? mono_gchandle_get_target(t->attach_parent) : NULL;
+    if (!source || !container || !parent || is_disposed(container) || is_disposed(parent))
+        return 0;
+    float y = native_y(source);
+    void *current = source, *control = NULL;
+    for (unsigned n = 0; n < t->path_count; n++) {
+        control = mono_gchandle_get_target(t->path[n]);
+        if (!control || native_parent(current) != control || is_disposed(control))
+            return 0;
+        y += native_y(control);
+        current = control;
+    }
+    if (!control || native_parent(control) != parent)
+        return 0;
+    float right = native_x(control) + native_width(control);
+    float x = right - t->panel_width;
+    if (x < 24.0f)
+        x = 24.0f;
+    float target_y = y - t->line_height - 24.0f;
+    if (native_x(container) != x)
+        native_set_x(container, x);
+    if (native_y(container) != target_y)
+        native_set_y(container, target_y);
+    int visible = native_shown(source);
+    if (native_visible(container) != visible)
+        native_set_visible(container, visible);
+    float parent_opacity = native_final_opacity(parent);
+    float opacity = parent_opacity > 0 ? native_final_opacity(source) / parent_opacity : 0;
+    if (opacity < 0)
+        opacity = 0;
+    if (opacity > 1)
+        opacity = 1;
+    if (native_opacity(container) != opacity)
+        native_set_opacity(container, opacity);
+    return 1;
 }
 static void clear_tracked(struct tracked *t) {
     remove_annotation(t);
@@ -306,6 +418,8 @@ static void clear_tracked(struct tracked *t) {
         mono_gchandle_free(t->node);
     if (t->source)
         mono_gchandle_free(t->source);
+    if (t->title)
+        mono_gchandle_free(t->title);
     memset(t, 0, sizeof *t);
 }
 static void render(struct tracked *t) {
@@ -319,69 +433,84 @@ static void render(struct tracked *t) {
         remove_annotation(t);
         return;
     }
-    if (atomic_load_explicit(&cache[t->index].state, memory_order_acquire) != 2 || t->rendered)
-        return;
-    void *parent = NULL;
-    if (!call(label_parent, source, NULL, &parent) || !parent || is_disposed(parent))
-        return;
-    float y, height;
-    if (!get_float(get_y, source, &y) || !get_float(get_height, source, &height))
-        return;
-    uint32_t parent_handle = mono_gchandle_new(parent, 1);
-    if (!parent_handle)
-        return;
-    void *obj = mono_object_new(mono_domain_get(), label_class);
-    if (!obj) {
-        mono_gchandle_free(parent_handle);
-        return;
-    }
-    t->annotation = mono_gchandle_new(obj, 1);
-    if (!t->annotation) {
-        mono_gchandle_free(parent_handle);
-        t->rendered = -1;
+    if (t->rendered > 0) {
+        if (!t->measure_ready && t->measure_attempts++ < 60) {
+            void *label = mono_gchandle_get_target(t->annotation);
+            void *container = mono_gchandle_get_target(t->container);
+            float width;
+            if (label && container && get_float(measure_text, label, &width) && width > 0 &&
+                width <= 600) {
+                t->panel_width = width + 40.0f;
+                if (set_float(set_width, label, width) &&
+                    set_float(set_width, container, t->panel_width))
+                    t->measure_ready = 1;
+            }
+        }
+        if (!position_container(t))
+            remove_annotation(t);
         return;
     }
-    if (!call(label_ctor, obj, NULL, NULL)) {
-        mono_gchandle_free(t->annotation);
-        t->annotation = 0;
-        mono_gchandle_free(parent_handle);
-        t->rendered = -1;
+    if (t->rendered < 0 || atomic_load_explicit(&cache[t->index].state, memory_order_acquire) != 2)
         return;
-    }
+    float height;
+    if (!get_float(get_height, source, &height) || height <= 0)
+        return;
+    void *label = mono_object_new(mono_domain_get(), label_class);
+    if (!label)
+        return;
+    t->annotation = mono_gchandle_new(label, 1);
+    if (!t->annotation)
+        return;
+    if (!call(label_ctor, label, NULL, NULL))
+        goto fail;
     void *text = mono_string_new(mono_domain_get(), cache[t->index].label);
     uint32_t text_handle = text ? mono_gchandle_new(text, 1) : 0;
     void *text_args[] = {text};
-    float width = 340.0f;
-    int ok = text_handle && copy_style(source, obj) && call(label_text, obj, text_args, NULL) &&
-             set_float(set_width, obj, width) && set_float(set_height, obj, height) &&
-             set_float(set_x, obj, -width - 16.0f) && set_float(set_y, obj, y);
+    int ok = text_handle && copy_style(source, label) && call(label_text, label, text_args, NULL);
     if (text_handle)
         mono_gchandle_free(text_handle);
-    void *args[] = {obj};
-    if (!ok || !call(append_child, parent, args, NULL)) {
-        remove_annotation(t);
-        t->rendered = -1;
-        log_event("annotation construction failed; waiting for next native update\n");
-        mono_gchandle_free(parent_handle);
-        return;
+    if (!ok)
+        goto fail;
+    float width = 340, measured;
+    t->measure_attempts = t->measure_ready = 0;
+    if (get_float(measure_text, label, &measured) && measured > 0 && measured <= 600) {
+        width = measured;
+        t->measure_ready = 1;
     }
-    void *actual_parent = NULL;
-    if (!call(label_parent, obj, NULL, &actual_parent) || actual_parent != parent) {
-        remove_annotation(t);
-        t->rendered = -1;
-        mono_gchandle_free(parent_handle);
-        return;
-    }
-    mono_gchandle_free(parent_handle);
+    t->line_height = height;
+    t->panel_width = width + 40.0f; /* 24 px left padding, 16 px right padding. */
+    t->panel_height = height + 16.0f;
+    if (!capture_anchors(t, source))
+        goto fail;
+    void *container = mono_object_new(mono_domain_get(), panel_class);
+    if (!container)
+        goto fail;
+    t->container = mono_gchandle_new(container, 1);
+    if (!t->container || !call(panel_ctor, container, NULL, NULL))
+        goto fail;
+    void *parent = mono_gchandle_get_target(t->attach_parent);
+    void *label_args[] = {label}, *container_args[] = {container};
+    if (!set_float(set_width, label, width) || !set_float(set_height, label, height) ||
+        !set_float(set_x, label, 24.0f) || !set_float(set_y, label, 8.0f) ||
+        !set_float(set_width, container, t->panel_width) ||
+        !set_float(set_height, container, t->panel_height) ||
+        !call(append_child, container, label_args, NULL) || !position_container(t) ||
+        !call(append_child, parent, container_args, NULL))
+        goto fail;
     t->rendered = 1;
     void *played = invoke(label_display, source, NULL);
     char *played_utf8 = played ? mono_string_to_utf8(played) : NULL;
-    log_event("rendered title=%s component=%s source=%p annotation=%p same-parent=%p played=%s "
+    log_event("rendered title=%s source=%p annotation=%p container=%p sibling-parent=%p played=%s "
               "completion=%s\n",
-              games[t->index].title, mono_class_get_name(mono_object_get_class(obj)), source, obj,
-              parent, played_utf8 ? played_utf8 : "", cache[t->index].label);
+              games[t->index].title, source, label, container, parent,
+              played_utf8 ? played_utf8 : "", cache[t->index].label);
     if (played_utf8)
         mono_free(played_utf8);
+    return;
+fail:
+    remove_annotation(t);
+    t->rendered = -1;
+    log_event("sibling annotation construction failed; waiting for native update\n");
 }
 static void inspect_label(void *source) {
     void *obj = source;
@@ -431,11 +560,13 @@ static void update_hook(void *app) {
         }
         if (slot < 16 && e.thread == (uintptr_t)pthread_self()) {
             clear_tracked(&tracked[slot]);
-            tracked[slot] = (struct tracked){e.node, e.label, 0, e.index, 0};
+            tracked[slot] = (struct tracked){
+                .node = e.node, .source = e.label, .title = e.title, .index = e.index};
             inspect_label(source);
         } else {
             mono_gchandle_free(e.node);
             mono_gchandle_free(e.label);
+            mono_gchandle_free(e.title);
             log_event("ignored played label: capacity/thread guard\n");
         }
         atomic_store_explicit(&read_index, ++r, memory_order_release);
@@ -463,12 +594,39 @@ static int setup_widgets(Image *image) {
     METHOD(dispose_label, "Dispose", 0)
     METHOD(get_x, "get_X", 0)
     METHOD(get_y, "get_Y", 0)
+    METHOD(get_width, "get_Width", 0)
     METHOD(get_height, "get_Height", 0)
     METHOD(set_x, "set_X", 1)
     METHOD(set_y, "set_Y", 1)
     METHOD(set_width, "set_Width", 1)
     METHOD(set_height, "set_Height", 1)
+    METHOD(measure_text, "GetTextWidth", 0)
 #undef METHOD
+#define NATIVE(variable, name, count)                                                              \
+    do {                                                                                           \
+        Method *m = method_inherited(label_class, name, count);                                    \
+        *(void **)(&variable) = m ? mono_compile_method(m) : NULL;                                 \
+        if (!variable) {                                                                           \
+            log_event("missing scalar method=%s\n", name);                                         \
+            return 0;                                                                              \
+        }                                                                                          \
+    } while (0)
+    NATIVE(native_x, "get_X", 0);
+    NATIVE(native_y, "get_Y", 0);
+    NATIVE(native_width, "get_Width", 0);
+    NATIVE(native_height, "get_Height", 0);
+    NATIVE(native_parent, "get_Parent", 0);
+    NATIVE(native_shown, "get_IsFinallyShown", 0);
+    NATIVE(native_visible, "get_Visible", 0);
+    NATIVE(native_set_visible, "set_Visible", 1);
+    NATIVE(native_opacity, "get_Opacity", 0);
+    NATIVE(native_final_opacity, "get_FinalOpacity", 0);
+    NATIVE(native_set_opacity, "set_Opacity", 1);
+    NATIVE(native_set_x, "set_X", 1);
+    NATIVE(native_set_y, "set_Y", 1);
+#undef NATIVE
+    if (!panel_class || !(panel_ctor = mono_class_get_method_from_name(panel_class, ".ctor", 0)))
+        return 0;
     const char *names[] = {"FontConfig", "Font", "TextColor"};
     for (unsigned n = 0; n < 3; n++) {
         char name[80];
@@ -527,6 +685,7 @@ __attribute__((visibility("default"), noreturn)) void *elf_main(void *args) {
     Class *base = i ? mono_class_from_name(i, "ReactNative.UIManager", "ReactShadowNode") : NULL;
     if (!raw || !base)
         goto parked;
+    panel_class = mono_class_from_name(i, "ReactNative.Views.UI3.View", "ReactPanel");
     Class *text_base = mono_class_get_parent(raw);
     parent_off = field_offset(base, "_parent");
     root_off = field_offset(base, "_rootNode");

@@ -2,13 +2,14 @@
 
 This branch (`feature/playtime-container`) develops a PS5 ELF payload that adds
 **HowLongToBeat Main Story completion time** alongside the shell's **Time played**
-control. It creates a separate native `SceShellUI` Label in the played-time
-label's container, copying its font and color. The original played time and game
-title remain intact.
+control. It creates a native `SceShellUI` Label in its own container, as a sibling
+of the played-time control. The completion stacks above played time, uses the
+same font and color, and follows the control through focus/layout changes.
+The original played-time wrapper and game title are preserved.
 
 **Development status:** the component and UI thread are verified on firmware
-12.20. The first insertion test restarted ShellUI; visibility and stability are
-still being investigated. See [played-time investigation](docs/PLAYTIME.md).
+12.20. A same-row experiment was confirmed visible. The separate sibling
+container and stacked layout are now undergoing console validation. See [played-time investigation](docs/PLAYTIME.md).
 The stable title-annotation version remains on `main` and release `v0.1.0`.
 
 Queries use game titles and run directly from the console over verified HTTPS.
@@ -39,7 +40,8 @@ lookups run in the background, and a UI frame applies a completed result.
 Example:
 
 ```text
-Main Story: 11h 03m    [Time played icon] 9m
+Main Story: 11h 03m
+[Time played icon] 9m
 ```
 
 ## Behavior and limits

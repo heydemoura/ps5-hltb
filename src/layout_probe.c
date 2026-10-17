@@ -63,6 +63,14 @@ __attribute__((visibility("default"))) void *elf_main(void *args) {
         m = mono_class_get_method_from_name(c, methods[n], counts[n]);
         fprintf(f, "Label.%s=%p\n", methods[n], m ? mono_compile_method(m) : NULL);
     }
+    c = mono_class_from_name(image, "Sce.PlayStation.PUI.UI3", "LabelElement");
+    const char *render_methods[] = {"get_Renderable", "get_IsRendering", "get_IsReadyToRender",
+                                    "Render", "OnRender"};
+    const int render_counts[] = {0, 0, 0, 1, 2};
+    for (unsigned n = 0; n < sizeof render_counts / sizeof render_counts[0]; n++) {
+        m = mono_class_get_method_from_name(c, render_methods[n], render_counts[n]);
+        fprintf(f, "LabelElement.%s=%p\n", render_methods[n], m ? mono_compile_method(m) : NULL);
+    }
     assembly = mono_domain_assembly_open(domain, "/system_ex/common_ex/lib/ReactNative.PUI.dll");
     image = assembly ? mono_assembly_get_image(assembly) : NULL;
     c = mono_class_from_name(image, "ReactNative.Views.UI3.View", "ReactTextShadowNode");

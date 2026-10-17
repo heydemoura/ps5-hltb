@@ -22,13 +22,22 @@ component is `Sce.PlayStation.PUI.UI3.Label`. Both the update callback and
 initialization guard is relocated in its trampoline; installation checks the
 actual instruction bytes before patching.
 
-The renderer creates a separate native `Label`, copies FontConfig, Font and
-TextColor from the played-time label, and appends it to that label's native
-parent. Its local position places the completion to the left of the stopwatch
-row. It never sets the source label's text or changes the game title.
+The current renderer creates a native `ReactPanel` beside the played-time
+control's branch in the elements tree. Attachment uses the native common
+ancestor of the selected game's title and played-time label, rather than the
+focus-dependent widths of the played-time wrappers. The new panel contains a
+separate native `Label`, copying FontConfig, Font and TextColor from played time.
+
+The completion is measured and stacked 16 pixels above the played-time label,
+with 24 pixels of left padding, 16 pixels of right padding, and 8 pixels of
+vertical padding. Its position, effective visibility and opacity follow the
+played-time control on each frame. If the shell rebuilds or reparents that
+control, the annotation is recreated in its own sibling container. Existing
+wrapper dimensions and source text are never set by this implementation.
+
 Construction, insertion, refresh and disposal run on the UI frame thread.
 Network queries stay on the background worker. GC handles retain tracked
-objects; disabling disposes annotations before hooks are removed.
+objects; disabling disposes the panel and label before hooks are removed.
 
 ## Validation status
 
@@ -82,3 +91,30 @@ completion. Memory inspection established:
 This evidence does not prove on-screen visibility. Rendering is disabled while
 that discrepancy is investigated. `tools/native_status.py` now rejects stale
 requests when their recorded ShellUI PID no longer has a readable memory map.
+
+## Draw observer and container expansion
+
+A temporary `LabelElement.OnRender` observer counted identical per-frame calls
+for the source played-time label and the completion label (for example,
+2,519 calls each). Thus the invisible completion was not explained by omission
+from that native callback. The observer's original bytes were restored and
+verified before the next renderer test.
+
+The narrow played-time row and its wrappers originally measured 97 pixels
+wide. A subsequent experiment expands the row and its equally narrow wrappers
+to 453 pixels, shifts their outer wrapper left by 356 pixels, and offsets the
+three original row children right by the same amount. The completion Label
+occupies the added space within the same row. Native world coordinates confirm
+the played-time label stays at `(1701,875)` while the new label is at
+`(1295,875)`. Geometry snapshots retain original values for disable/removal.
+This is a visibility experiment; a narrow wrapper or intermediate render target
+has not yet been established as the cause. User-visible confirmation is pending.
+
+## User feedback incorporated
+
+The user confirmed the expanded same-row experiment became visible. They asked
+for more left padding, a vertical stack above played time, and a separate
+sibling container because focusing Play Game causes the original wrapper to
+rerender and change dimensions. The current implementation above replaces the
+expansion experiment and does not resize or reposition original shell widgets.
+Focus-transition and game-switching visual checks are pending.
