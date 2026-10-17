@@ -1,5 +1,12 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
+#ifdef HLTB_LAYOUT_PROBE
+#include "layout_probe_blob.h"
+#define shell_probe_blob layout_probe_blob
+#define PROBE_LOG "/system_tmp/hltb-layout-probe.log"
+#else
 #include "shell_probe_blob.h"
+#define PROBE_LOG "/system_tmp/hltb-shell-probe-v2.log"
+#endif
 #include "stable_shellui_injector.hpp"
 #include <cstdio>
 #include <cstdlib>
@@ -35,8 +42,10 @@ int main() {
         std::puts("ShellUI not found");
         return 1;
     }
+    FILE *f = nullptr;
+#ifndef HLTB_LAYOUT_PROBE
     char marker[128] = {0};
-    FILE *f = std::fopen("/system_tmp/hltb-shell-probe-v2.log", "r");
+    f = std::fopen(PROBE_LOG, "r");
     if (f) {
         std::fgets(marker, sizeof marker, f);
         std::fclose(f);
@@ -46,6 +55,7 @@ int main() {
             return 1;
         }
     }
+#endif
     std::printf("Inject read-only metadata probe into ShellUI pid=%d bytes=%zu\n", pid,
                 sizeof shell_probe_blob);
     std::fflush(stdout);
@@ -56,7 +66,7 @@ int main() {
                 r.first_unresolved ? r.first_unresolved : "", r.pthread_create_ok,
                 r.pthread_create_rc, r.detached, r.auth_restored);
     for (int n = 0; n < 10; n++) {
-        f = std::fopen("/system_tmp/hltb-shell-probe-v2.log", "r");
+        f = std::fopen(PROBE_LOG, "r");
         if (f) {
             char line[512];
             while (std::fgets(line, sizeof line, f))

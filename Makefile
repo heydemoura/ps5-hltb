@@ -70,7 +70,7 @@ build:
 	mkdir -p build
 build/shell_probe.elf build/shell_trace.elf build/loader-bridge.o build/loader-pt.o build/catalog-probe.elf: | build
 
-NATIVE_SOURCES := src/cache.c src/shell_native.c src/catalog.c src/catalog_snapshot.c src/hltb.c src/http_ps5.c third_party/cJSON/cJSON.c
+NATIVE_SOURCES := src/cache.c src/playtime_native.c src/catalog.c src/catalog_snapshot.c src/hltb.c src/http_ps5.c third_party/cJSON/cJSON.c
 build/shell_native.elf: $(NATIVE_SOURCES) src/native_protocol.h src/root_ca.h | build
 	$(CC) -shared -Wl,--unresolved-symbols=ignore-all -nostartfiles -nodefaultlibs -fPIC -fno-stack-protector -O2 -Wno-unreachable-code-generic-assoc -Isrc -Ithird_party/cJSON -Wl,-e,elf_main -Wl,-Bsymbolic -Wl,--hash-style=sysv -Wl,-z,now -o $@ $(NATIVE_SOURCES) -lkernel_sys -lSceLibcInternal -lSceNet -lSceSsl -lSceHttp2
 build/shell_native_blob.h: build/shell_native.elf
@@ -124,3 +124,13 @@ build/test-storage: tests/test_storage.c src/cache.c src/hltb.c src/catalog_snap
 
 build/reset-native-marker.elf: tools/control_native.c src/native_protocol.h | build
 	$(CC) $(CFLAGS) -Isrc -DHLTB_NATIVE_CLEAR_MARKER -o $@ $<
+
+# One-shot native layout metadata inspection; no widget modifications.
+build/layout_probe.elf: src/layout_probe.c | build
+	$(CC) -shared -Wl,--unresolved-symbols=ignore-all -nostartfiles -nodefaultlibs -fPIC -fno-stack-protector -O2 -Wl,-e,elf_main -Wl,-Bsymbolic -Wl,--hash-style=sysv -Wl,-z,now -o $@ $< -lkernel_sys -lSceLibcInternal
+build/layout_probe_blob.h: build/layout_probe.elf
+	python3 -c 'from pathlib import Path; b=Path("$<").read_bytes(); Path("$@").write_text("static const unsigned char layout_probe_blob[]={"+",".join(map(str,b))+"};\n")'
+build/inspect-layout.elf: tools/inject_probe.cpp $(LOADER)/stable_shellui_injector.cpp $(LOADER)/remote_call.cpp build/loader-bridge.o build/loader-pt.o build/layout_probe_blob.h
+	$(CXX) -DHLTB_LAYOUT_PROBE -std=c++20 -O2 -Ibuild -I$(LOADER) -I$(SHSRV) -o $@ $(filter %.cpp %.o,$^)
+inspect-layout: build/inspect-layout.elf
+	$(PS5_DEPLOY) -h $(PS5_HOST) -p $(PS5_PORT) $<

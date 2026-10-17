@@ -1,17 +1,18 @@
 # ps5-hltb
 
-A PS5 ELF payload that adds **HowLongToBeat Main Story completion time** to
-native game-title text on the home screen.
+This branch (`feature/playtime-container`) develops a PS5 ELF payload that adds
+**HowLongToBeat Main Story completion time** alongside the shell's **Time played**
+control. It creates a separate native `SceShellUI` Label in the played-time
+label's container, copying its font and color. The original played time and game
+title remain intact.
 
-The payload queries games **by title**, using HowLongToBeat directly from the
-console over HTTPS. It updates the existing React text node in **SceShellUI**,
-so the completion text uses the title's existing font, size and styling.
-No separate overlay font, PC proxy, account, or API key is needed.
+**Development status:** the component and UI thread are verified on firmware
+12.20. The first insertion test restarted ShellUI; visibility and stability are
+still being investigated. See [played-time investigation](docs/PLAYTIME.md).
+The stable title-annotation version remains on `main` and release `v0.1.0`.
 
-**Tested on PS5 firmware 12.20 with elfldr at `192.168.0.190:9021`.** The user
-confirmed Resident Evil Requiem's completion time was visible in the title font,
-and Astro Bot's time appeared automatically after its first lookup.
-See [validation evidence](docs/VALIDATION.md).
+Queries use game titles and run directly from the console over verified HTTPS.
+No PC proxy, account or API key is needed.
 
 ## Build and run
 
@@ -27,19 +28,18 @@ make deploy PS5_HOST=192.168.0.190
 ```
 
 `build/hltb.elf` is the **single main payload**: it exports the installed-game
-title catalog, injects the native renderer, validates and installs the text
+title catalog, injects the native renderer, validates and installs the native
 hooks, then enables annotations. Send this ELF to elfldr with any compatible
 payload sender. No additional files need to be copied onto the console.
 
-Highlight a game on the home screen. Cached results appear with the title;
-new titles are queried in the background and applied on a subsequent React
-text update. The first lookup can take up to the next UI update (often within
-a minute); selecting the game again also displays a ready result.
+Highlight a game with a visible Time played control. The shell's native label
+update identifies the control. Cached results can display immediately; new
+lookups run in the background, and a UI frame applies a completed result.
 
 Example:
 
 ```text
-RESIDENT EVIL requiem  |  Main Story: 11h 03m
+Main Story: 11h 03m    [Time played icon] 9m
 ```
 
 ## Behavior and limits
@@ -51,7 +51,7 @@ RESIDENT EVIL requiem  |  Main Story: 11h 03m
 - Queries HowLongToBeat's website search, matches the game title, and reads
   `comp_main` in seconds. Trademarks are removed from search terms and ignored
   when matching. Edition names and numerals remain significant.
-- Missing matches and missing/zero Main Story estimates leave the title alone.
+- Missing matches and missing/zero Main Story estimates leave the shell alone.
   A failed title is not retried repeatedly during the same payload session.
 - Uses verified TLS with an embedded GlobalSign Root R46 certificate. The
   unofficial website API can change, and strict title matching can miss
@@ -61,8 +61,8 @@ RESIDENT EVIL requiem  |  Main Story: 11h 03m
   8 KiB; live results also stay in memory. The console can clear temporary
   files on reboot. Logs are bounded to fit the console's small temporary
   filesystem. No saved game or application database is edited.
-- Font settings are left to the existing title widget. Long titles can still
-  be constrained by the shell's native text layout.
+- The completion uses the played-time label's native component, font and color.
+  The existing game title and played-time text are preserved.
 - Firmware 12.20 is the only firmware tested. This is an experimental homebrew
   payload. The resident code lasts until ShellUI restarts or the console reboots.
   Loading a duplicate into the same ShellUI is refused.
@@ -86,9 +86,9 @@ Additional development targets:
 - `make inject-trace` / `make remove-trace`: temporary text tracing and undo.
 - `make inject-native` / `make enable-native`: staged renderer installation
   for inspection. The main `hltb.elf` performs both steps automatically.
-- `make disable-native`: stops annotating subsequent title updates.
-- `make remove-native`: restores the original native method bytes. Existing
-  title text returns to normal when the shell next recreates that text.
+- `make disable-native`: removes the completion labels on a subsequent UI frame.
+- `make remove-native`: disables annotations, allows frame cleanup, then restores
+  the original native method bytes.
 - `make replace-native`: development replacement after restoring old hooks.
   Old injected threads remain inert until reboot.
 

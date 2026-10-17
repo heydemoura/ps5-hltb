@@ -107,6 +107,22 @@ static bool patch(pid_t pid, const char *path, bool remove) {
                     std::memcpy(t + 27, &back, 8);
                     tsize = 35;
                     valid = true;
+                } else if (q.kind == 1 &&
+                           !std::memcmp(b, "\x55\x48\x89\xe5\x41\x56\x53\x80\x3d", 9) &&
+                           b[13] == 0) {
+                    // ReactTextShadowNode.UpdateLabel: relocate its RIP-relative guard.
+                    int32_t disp;
+                    std::memcpy(&disp, b + 9, 4);
+                    uint64_t cmp = q.method + 14 + disp, back = q.method + 14;
+                    std::memcpy(t, b, 7);
+                    t[7] = 0x49;
+                    t[8] = 0xbb;
+                    std::memcpy(t + 9, &cmp, 8);
+                    const unsigned char mid[] = {0x41, 0x80, 0x3b, 0, 0xff, 0x25, 0, 0, 0, 0};
+                    std::memcpy(t + 17, mid, sizeof mid);
+                    std::memcpy(t + 27, &back, 8);
+                    tsize = 35;
+                    valid = true;
                 } else if (q.kind == 2 &&
                            !std::memcmp(
                                b,
@@ -179,6 +195,9 @@ int main() {
     if (!pid)
         return 1;
 #ifdef HLTB_NATIVE_REMOVE
+    // Let the frame callback dispose its sibling labels before restoring hooks.
+    unlink("/system_tmp/hltb-native.enable");
+    usleep(400000);
     bool a = patch(pid, HLTB_NATIVE_TEXT, true);
     bool b = patch(pid, HLTB_NATIVE_UPDATE, true);
     return a && b ? 0 : 1;
@@ -239,9 +258,9 @@ int main() {
         return 1;
     }
     std::fclose(enabled);
-    std::puts("HowLongToBeat native title annotations enabled");
+    std::puts("HowLongToBeat native annotations enabled");
 #else
-    std::puts("Native title observer online; rendering remains disabled for inspection");
+    std::puts("Native observer online; rendering remains disabled for inspection");
 #endif
     return 0;
 #endif

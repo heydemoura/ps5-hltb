@@ -19,6 +19,7 @@ def get(path):
 root=Path(__file__).resolve().parent.parent
 symbols=json.loads((root/'build/loaded-native.symbols.json').read_text())
 magic,pid,kind,method,hook,tramp=struct.unpack('<QiIQQQ',get('/file/system_tmp/hltb-native-text.req'))
+get(f'/maps/{pid}')  # Reject a stale request after ShellUI restarts.
 base=hook-symbols['text_hook']
 print(f'pid={pid} image-base={base:x} method={method:x}')
 for name,fmt in [('frames','<I'),('enabled','<I'),('game_count','<Q'),('setter_thread','<Q'),('update_thread','<Q')]:
