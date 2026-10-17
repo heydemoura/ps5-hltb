@@ -1,0 +1,102 @@
+name: Build and release
+
+on:
+  pull_request:
+  push:
+    tags:
+      - 'v*'
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-release-${{ github.event.release.tag_name || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build and test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      SDK_VERSION: v0.44
+      SDK_SHA256: 4d06eab777bb135705b5a6816688c9132efb246093fe606ac488ab6cf65ca5b0
+      LLVM_CONFIG: /usr/bin/llvm-config-18
+      HOST_CC: clang-18
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential clang-18 lld-18 llvm-18 unzip
+
+      - name: Install pinned PS5 payload SDK
+        run: |
+          curl --fail --location --retry 3 \
+            "https://github.com/ps5-payload-dev/sdk/releases/download/${SDK_VERSION}/ps5-payload-sdk.zip" \
+            --output "$RUNNER_TEMP/ps5-payload-sdk.zip"
+          echo "$SDK_SHA256  $RUNNER_TEMP/ps5-payload-sdk.zip" | sha256sum --check
+          unzip -q "$RUNNER_TEMP/ps5-payload-sdk.zip" -d "$RUNNER_TEMP"
+          echo "PS5_PAYLOAD_SDK=$RUNNER_TEMP/ps5-payload-sdk" >> "$GITHUB_ENV"
+
+      - name: Build payloads and run sanitizer tests
+        run: make -j2 all test
+
+      - name: Check Python tools
+        run: python3 -m py_compile tools/*.py
+
+      - name: Package release assets
+        run: |
+          mkdir -p dist
+          cp build/hltb.elf build/hltb-query.elf dist/
+          cd dist
+          sha256sum hltb.elf hltb-query.elf > SHA256SUMS
+          sha256sum --check SHA256SUMS
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-payloads
+          path: dist/
+          if-no-files-found: error
+
+  publish:
+    name: Publish release
+    needs: build
+    if: github.event_name == 'release' || (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RELEASE_TAG: ${{ github.event.release.tag_name || github.ref_name }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-payloads
+          path: dist
+
+      - name: Verify and publish assets
+        run: |
+          (cd dist && sha256sum --check SHA256SUMS)
+          assets=(dist/hltb.elf dist/hltb-query.elf dist/SHA256SUMS)
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" "${assets[@]}" --clobber
+          else
+            notes=(--generate-notes)
+            if [[ -f "docs/releases/${RELEASE_TAG}.md" ]]; then
+              notes=(--notes-file "docs/releases/${RELEASE_TAG}.md")
+            fi
+            gh release create "$RELEASE_TAG" "${assets[@]}" \
+              --verify-tag --draft --title "$RELEASE_TAG" "${notes[@]}"
+          fi
+          if [[ "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" == true ]]; then
+            gh release edit "$RELEASE_TAG" --draft=false
+          fi
