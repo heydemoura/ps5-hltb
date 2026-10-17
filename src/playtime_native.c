@@ -70,7 +70,7 @@ static struct hltb_game games[HLTB_CATALOG_MAX];
 static size_t game_count;
 struct cache {
     atomic_int state;
-    char label[100];
+    char label[320];
 };
 static struct cache cache[HLTB_CATALOG_MAX];
 static atomic_int enabled, frames;
@@ -233,6 +233,9 @@ static void text_hook(void *node, void *label) {
 static Class *label_class, *panel_class;
 static Method *label_ctor, *panel_ctor, *label_text, *label_parent, *label_disposed, *measure_text;
 static Method *append_child, *remove_child, *dispose_label;
+static Method *get_background, *set_background, *get_radius, *set_radius, *set_max_lines;
+static Class *native_panel_base;
+static int first_child_off, next_sibling_off;
 static Method *get_x, *get_y, *get_width, *get_height, *set_x, *set_y, *set_width, *set_height;
 static float (*native_x)(void *), (*native_y)(void *), (*native_width)(void *),
     (*native_height)(void *);
@@ -252,6 +255,7 @@ struct tracked {
     unsigned path_count;
     int index, rendered, measure_attempts, measure_ready;
     float panel_width, panel_height, line_height;
+    float pad_left, pad_right, pad_top, pad_bottom;
 };
 static struct tracked tracked[16];
 static Method *method_inherited(Class *c, const char *name, int count) {
@@ -306,6 +310,74 @@ static int copy_style(void *source, void *target) {
         if (!ok)
             return 0;
     }
+    return 1;
+}
+static void measure_padding(struct tracked *t, void *source) {
+    void *row = native_parent(source);
+    float w = native_width(row), h = native_height(row);
+    float left = native_x(source), top = native_y(source);
+    float right = w - left - native_width(source), bottom = h - top - native_height(source);
+    void *child = ptr(row, first_child_off);
+    for (unsigned n = 0; child && n < 32; n++, child = ptr(child, next_sibling_off)) {
+        if (!native_shown(child) || native_width(child) <= 0 || native_height(child) <= 0)
+            continue;
+        float x = native_x(child), y = native_y(child);
+        float r = w - x - native_width(child), b = h - y - native_height(child);
+        if (x >= 0 && x < left)
+            left = x;
+        if (y >= 0 && y < top)
+            top = y;
+        if (r >= 0 && r < right)
+            right = r;
+        if (b >= 0 && b < bottom)
+            bottom = b;
+    }
+    /* Requested horizontal spacing supersedes the native row's smaller insets. */
+    t->pad_left = 24.0f;
+    t->pad_right = 24.0f;
+    t->pad_top = top >= 0 && top <= 128 ? top : 0;
+    t->pad_bottom = bottom >= 0 && bottom <= 128 ? bottom : 0;
+}
+static int copy_background(struct tracked *t, void *container) {
+    for (unsigned n = 0; n < t->path_count; n++) {
+        void *source = mono_gchandle_get_target(t->path[n]);
+        Class *cls = mono_object_get_class(source);
+        while (cls && cls != native_panel_base)
+            cls = mono_class_get_parent(cls);
+        if (!cls)
+            continue;
+        void *value = NULL;
+        if (!call(get_background, source, NULL, &value) || !value)
+            return 0;
+        uint32_t handle = mono_gchandle_new(value, 1);
+        if (!handle)
+            return 0;
+        float rgba[4];
+        memcpy(rgba, mono_object_unbox(value), sizeof rgba);
+        if (rgba[3] > 0) {
+            void *args[] = {mono_object_unbox(value)};
+            int ok = call(set_background, container, args, NULL);
+            float radius = 0;
+            ok = ok && get_float(get_radius, source, &radius) &&
+                 set_float(set_radius, container, radius);
+            log_event("metrics background=%g,%g,%g,%g padding=%g,%g,%g,%g radius=%g\n",
+                      (double)rgba[0], (double)rgba[1], (double)rgba[2], (double)rgba[3],
+                      (double)t->pad_left, (double)t->pad_right, (double)t->pad_top,
+                      (double)t->pad_bottom, (double)radius);
+            mono_gchandle_free(handle);
+            return ok;
+        }
+        mono_gchandle_free(handle);
+    }
+    log_event("played-time background not found\n");
+    return 0;
+}
+static int metric_width(void *label, float *out) {
+    float limit = 600;
+    void *args[] = {&limit}, *value = NULL;
+    if (!call(measure_text, label, args, &value) || !value)
+        return 0;
+    memcpy(out, mono_object_unbox(value), sizeof *out);
     return 1;
 }
 static void release_anchors(struct tracked *t) {
@@ -394,7 +466,7 @@ static int position_container(struct tracked *t) {
     float x = right - t->panel_width;
     if (x < 24.0f)
         x = 24.0f;
-    float target_y = y - t->line_height - 24.0f;
+    float target_y = y - t->pad_top - 16.0f - t->panel_height;
     if (native_x(container) != x)
         native_set_x(container, x);
     if (native_y(container) != target_y)
@@ -438,9 +510,8 @@ static void render(struct tracked *t) {
             void *label = mono_gchandle_get_target(t->annotation);
             void *container = mono_gchandle_get_target(t->container);
             float width;
-            if (label && container && get_float(measure_text, label, &width) && width > 0 &&
-                width <= 600) {
-                t->panel_width = width + 40.0f;
+            if (label && container && metric_width(label, &width) && width > 0 && width <= 600) {
+                t->panel_width = width + t->pad_left + t->pad_right;
                 if (set_float(set_width, label, width) &&
                     set_float(set_width, container, t->panel_width))
                     t->measure_ready = 1;
@@ -455,6 +526,8 @@ static void render(struct tracked *t) {
     float height;
     if (!get_float(get_height, source, &height) || height <= 0)
         return;
+    measure_padding(t, source);
+    height *= 3;
     void *label = mono_object_new(mono_domain_get(), label_class);
     if (!label)
         return;
@@ -466,20 +539,24 @@ static void render(struct tracked *t) {
     void *text = mono_string_new(mono_domain_get(), cache[t->index].label);
     uint32_t text_handle = text ? mono_gchandle_new(text, 1) : 0;
     void *text_args[] = {text};
-    int ok = text_handle && copy_style(source, label) && call(label_text, label, text_args, NULL);
+    int max_lines = 3;
+    void *line_args[] = {&max_lines};
+    int ok = text_handle && copy_style(source, label) &&
+             call(set_max_lines, label, line_args, NULL) &&
+             call(label_text, label, text_args, NULL);
     if (text_handle)
         mono_gchandle_free(text_handle);
     if (!ok)
         goto fail;
     float width = 340, measured;
     t->measure_attempts = t->measure_ready = 0;
-    if (get_float(measure_text, label, &measured) && measured > 0 && measured <= 600) {
+    if (metric_width(label, &measured) && measured > 0 && measured <= 600) {
         width = measured;
         t->measure_ready = 1;
     }
     t->line_height = height;
-    t->panel_width = width + 40.0f; /* 24 px left padding, 16 px right padding. */
-    t->panel_height = height + 16.0f;
+    t->panel_width = width + t->pad_left + t->pad_right;
+    t->panel_height = height + t->pad_top + t->pad_bottom;
     if (!capture_anchors(t, source))
         goto fail;
     void *container = mono_object_new(mono_domain_get(), panel_class);
@@ -491,9 +568,9 @@ static void render(struct tracked *t) {
     void *parent = mono_gchandle_get_target(t->attach_parent);
     void *label_args[] = {label}, *container_args[] = {container};
     if (!set_float(set_width, label, width) || !set_float(set_height, label, height) ||
-        !set_float(set_x, label, 24.0f) || !set_float(set_y, label, 8.0f) ||
+        !set_float(set_x, label, t->pad_left) || !set_float(set_y, label, t->pad_top) ||
         !set_float(set_width, container, t->panel_width) ||
-        !set_float(set_height, container, t->panel_height) ||
+        !set_float(set_height, container, t->panel_height) || !copy_background(t, container) ||
         !call(append_child, container, label_args, NULL) || !position_container(t) ||
         !call(append_child, parent, container_args, NULL))
         goto fail;
@@ -600,7 +677,8 @@ static int setup_widgets(Image *image) {
     METHOD(set_y, "set_Y", 1)
     METHOD(set_width, "set_Width", 1)
     METHOD(set_height, "set_Height", 1)
-    METHOD(measure_text, "GetTextWidth", 0)
+    METHOD(measure_text, "GetLongestLineWidth", 1)
+    METHOD(set_max_lines, "set_MaxLineCount", 1)
 #undef METHOD
 #define NATIVE(variable, name, count)                                                              \
     do {                                                                                           \
@@ -626,6 +704,21 @@ static int setup_widgets(Image *image) {
     NATIVE(native_set_y, "set_Y", 1);
 #undef NATIVE
     if (!panel_class || !(panel_ctor = mono_class_get_method_from_name(panel_class, ".ctor", 0)))
+        return 0;
+    native_panel_base = mono_class_from_name(image, "Sce.PlayStation.PUI.UI3", "Panel");
+    Class *widget = mono_class_from_name(image, "Sce.PlayStation.PUI.UI3", "Widget");
+    if (!native_panel_base || !widget)
+        return 0;
+    Field *first = mono_class_get_field_from_name(widget, "firstChild");
+    Field *next = mono_class_get_field_from_name(widget, "nextSibling");
+    first_child_off = first ? mono_field_get_offset(first) : -1;
+    next_sibling_off = next ? mono_field_get_offset(next) : -1;
+    get_background = method_inherited(native_panel_base, "get_BackgroundColor", 0);
+    set_background = method_inherited(native_panel_base, "set_BackgroundColor", 1);
+    get_radius = method_inherited(native_panel_base, "get_BorderRadius", 0);
+    set_radius = method_inherited(native_panel_base, "set_BorderRadius", 1);
+    if (first_child_off < 16 || next_sibling_off < 16 || !get_background || !set_background ||
+        !get_radius || !set_radius)
         return 0;
     const char *names[] = {"FontConfig", "Font", "TextColor"};
     for (unsigned n = 0; n < 3; n++) {
@@ -671,9 +764,8 @@ __attribute__((visibility("default"), noreturn)) void *elf_main(void *args) {
         game_count = hltb_catalog_load(games, HLTB_CATALOG_MAX);
     for (size_t n = 0; n < game_count; n++) {
         hltb_result r;
-        char time[100];
-        if (!hltb_cache_read(games[n].title, &r) &&
-            !hltb_format_time(r.main_seconds, time, sizeof time)) {
+        char time[320];
+        if (!hltb_cache_read(games[n].title, &r) && !hltb_format_metrics(&r, time, sizeof time)) {
             snprintf(cache[n].label, sizeof cache[n].label, "%s", time);
             atomic_store(&cache[n].state, 2);
         }
@@ -726,8 +818,8 @@ __attribute__((visibility("default"), noreturn)) void *elf_main(void *args) {
             if (atomic_load_explicit(&cache[n].state, memory_order_acquire) == 1) {
                 hltb_result result = {0};
                 int rc = hltb_lookup(games[n].title, &result);
-                char time[100];
-                if (!rc && !hltb_format_time(result.main_seconds, time, sizeof time)) {
+                char time[320];
+                if (!rc && !hltb_format_metrics(&result, time, sizeof time)) {
                     (void)hltb_cache_write(games[n].title, &result);
                     snprintf(cache[n].label, sizeof cache[n].label, "%s", time);
                     atomic_store_explicit(&cache[n].state, 2, memory_order_release);

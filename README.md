@@ -1,7 +1,7 @@
 # ps5-hltb
 
 This branch (`feature/playtime-container`) develops a PS5 ELF payload that adds
-**HowLongToBeat Main Story completion time** alongside the shell's **Time played**
+**HowLongToBeat Main Story, Main + Extra and Completionist times** alongside the shell's **Time played**
 control. It creates a native `SceShellUI` Label in its own container, as a sibling
 of the played-time control. The completion stacks above played time, uses the
 same font and color, and follows the control through focus/layout changes.
@@ -41,6 +41,8 @@ Example:
 
 ```text
 Main Story: 11h 03m
+Main + Extra: 14h 01m
+Completionist: 31h 51m
 [Time played icon] 9m
 ```
 
@@ -51,7 +53,7 @@ Main Story: 11h 03m
   addresses from a previous session. Hook prologues must match supported
   instruction sequences or installation is rejected.
 - Queries HowLongToBeat's website search, matches the game title, and reads
-  `comp_main` in seconds. Trademarks are removed from search terms and ignored
+  `comp_main`, `comp_plus` and `comp_100` in seconds. Trademarks are removed from search terms and ignored
   when matching. Edition names and numerals remain significant.
 - Missing matches and missing/zero Main Story estimates leave the shell alone.
   A failed title is not retried repeatedly during the same payload session.
@@ -63,7 +65,9 @@ Main Story: 11h 03m
   8 KiB; live results also stay in memory. The console can clear temporary
   files on reboot. Logs are bounded to fit the console's small temporary
   filesystem. No saved game or application database is edited.
-- The completion uses the played-time label's native component, font and color.
+- Metrics appear on three lines using the played-time label's native component,
+  font and color. The panel copies the played-time background color, corner
+  radius and vertical padding, with 24 px horizontal padding on each side. Unavailable extra/completionist estimates display `N/A`.
   The existing game title and played-time text are preserved.
 - Firmware 12.20 is the only firmware tested. This is an experimental homebrew
   payload. The resident code lasts until ShellUI restarts or the console reboots.

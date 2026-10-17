@@ -125,3 +125,41 @@ switch away and back, then focus Play Game to check the stack, padding and
 preservation of the original played-time control. The final implementation is
 committed on `feature/playtime-container`; the earlier expansion experiment is
 retained here only as investigation history.
+
+## Three completion metrics
+
+The next iteration adds `comp_plus` (Main + Extra) and `comp_100`
+(Completionist), each on its own line after Main Story. Missing, zero, negative,
+non-numeric or oversized optional estimates become `N/A`. Main Story matching
+and validation retain their prior behavior. The bounded cache now uses schema
+version 2 so pre-existing Main Story-only entries trigger a fresh lookup.
+
+The metrics panel copies the first non-transparent native panel background in
+the played-time branch and measures the visible row's content insets. A
+three-line native Label uses the same source font and color. The panel remains
+a sibling of the played-time control and is placed above its background box.
+
+A live PS5 HTTPS lookup for Resident Evil Requiem returned:
+
+```text
+Main Story: 11h 03m
+Main + Extra: 14h 01m
+Completionist: 31h 51m
+```
+
+Host tests cover all three values, optional invalid/unavailable estimates,
+multiline formatting and buffer limits, cache round-trip and legacy-cache
+invalidation. Sanitizer-enabled parsing and bounded storage tests pass.
+The user confirmed all three lines, translucent black background, padding and
+Play Game focus behavior on the console. The background copied from the native
+played-time panel was RGBA `(0,0,0,0.701961)`.
+
+The user then requested matching border radius, confirmed that change works,
+and asked for more horizontal padding. The final spacing is 24 pixels on both
+sides; vertical padding and border radius continue to come from the native
+played-time panel. The user confirmed the increased horizontal padding looks
+right and requested committing these changes.
+
+A second live PS5 lookup for Astro Bot returned Main Story `11h 06m`,
+Main + Extra `15h 12m`, and Completionist `18h 31m`. Both live queries and all
+host tests passed before the final commit.
