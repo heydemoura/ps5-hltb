@@ -1,6 +1,6 @@
 # ps5-hltb
 
-This branch (`feature/playtime-container`) develops a PS5 ELF payload that adds
+This PS5 ELF payload adds
 **HowLongToBeat Main Story, Main + Extra and Completionist times** alongside the shell's **Time played**
 control. It creates a native `SceShellUI` Label in its own container, as a sibling
 of the played-time control. The completion stacks above played time, uses the
@@ -10,7 +10,7 @@ The original played-time wrapper and game title are preserved.
 **Validated on firmware 12.20:** the user confirmed the sibling-container version
 works after the game-switching and Play Game focus check. See
 [validation and investigation](docs/PLAYTIME.md).
-The stable title-annotation version remains on `main` and release `v0.1.0`.
+The earlier title-annotation version is available in release `v0.1.0`.
 
 Queries use game titles and run directly from the console over verified HTTPS.
 No PC proxy, account or API key is needed.
