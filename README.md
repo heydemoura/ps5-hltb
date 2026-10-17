@@ -144,5 +144,5 @@ Additional development targets:
 Runtime logs are in `/system_tmp/hltb-native.log`. Firmware captures and build
 artifacts stay in ignored `build/`; no Sony firmware or font assets are included.
 
-Source repository: [heydemoura/ps5-hltb](https://github.com/heydemoura/ps5-hltb)
-(private). License: GPL-3.0-or-later; see [third-party notices](THIRD_PARTY_NOTICES.md).
+Source repository: [heydemoura/ps5-hltb](https://github.com/heydemoura/ps5-hltb).
+License: GPL-3.0-or-later; see [third-party notices](THIRD_PARTY_NOTICES.md).
